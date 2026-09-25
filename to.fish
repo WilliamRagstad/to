@@ -3,6 +3,7 @@
 #   to home    to dev    to config    to tools    to lento    to workspace
 #   to add /some/path
 #   to remove <name>
+#   to path <name>
 #
 # Shortcuts are stored in ~/.config/to/mapping (name=path lines).
 
@@ -33,7 +34,7 @@ function _to_refresh
             end
             set -l parts (string split '=' "$line")
             if test (count $parts) -ge 2
-                set -l name $parts[1]
+                set -l name (string lower $parts[1])
                 set -l path (string join '=' $parts[2..-1])
                 # Skip if already in hardcoded list
                 set -l _exists 0
@@ -55,16 +56,15 @@ _to_refresh
 function _to_usage
     echo "Usage: to <shortcut>"
     echo "       to add <path> [name]"
+    echo "       to path <name>"
     echo
     echo "Available shortcuts:"
-    for entry in $_to_dirs_cached
+    for entry in (printf '%s\n' $_to_dirs_cached | sort)
         set -l key (string split ':' "$entry")[1]
         set -l dir (string split ':' "$entry")[2]
         printf "  %-12s -> %s\n" "$key" "$dir"
     end
     echo
-    echo "Add shortcuts: to add <path> [name]"
-    echo "Remove shortcuts: to remove <name>"
 end
 
 function to
@@ -92,11 +92,12 @@ function to
             set add_name (basename "$resolved")
             test "$add_name" = "" && set add_name "/"
         end
+        set add_name (string lower "$add_name")
         set -l mapping_file "$HOME/.config/to/mapping"
         mkdir -p (dirname "$mapping_file")
         if test -f "$mapping_file"
             set -l temp_file (mktemp)
-            grep -v "^$add_name=" "$mapping_file" > "$temp_file" 2>/dev/null || true
+            grep -iv "^$add_name=" "$mapping_file" > "$temp_file" 2>/dev/null || true
             mv "$temp_file" "$mapping_file"
         end
         echo "$add_name=$resolved" >> "$mapping_file"
@@ -116,16 +117,39 @@ function to
             echo "Error: no mappings file." >&2
             return 1
         end
-        if not grep -q "^$rm_name=" "$mapping_file" 2>/dev/null
+        if not grep -iq "^$rm_name=" "$mapping_file" 2>/dev/null
             echo "Error: shortcut '$rm_name' not found in mappings." >&2
             return 1
         end
         set -l temp_file (mktemp)
-        grep -v "^$rm_name=" "$mapping_file" > "$temp_file" 2>/dev/null || true
+        grep -iv "^$rm_name=" "$mapping_file" > "$temp_file" 2>/dev/null || true
         mv "$temp_file" "$mapping_file"
         _to_refresh
         echo "Removed $rm_name"
         return 0
+    end
+
+    if test "$cmd" = "path"
+        if test (count $argv) -lt 2
+            echo "Usage: to path <name>" >&2
+            return 1
+        end
+        set -l name (string lower "$argv[2]")
+        for entry in $_to_dirs_cached
+            set -l key (string split ':' "$entry")[1]
+            set -l dir (string split ':' "$entry")[2]
+            if test "$name" = "$key"
+                if test -d "$dir"
+                    printf '%s\n' "$dir"
+                    return 0
+                else
+                    echo "Error: target directory '$dir' does not exist." >&2
+                    return 1
+                end
+            end
+        end
+        echo "Error: unknown shortcut '$name'." >&2
+        return 1
     end
 
     set -l name "$cmd"

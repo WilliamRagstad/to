@@ -13,6 +13,7 @@ set -euo pipefail
 # Help:  to (no args) or `to --help`
 # Add:   to add <path> [name]
 # Remove: to remove <name>
+# Path:   to path <name>
 
 _is_zsh=0
 [[ -n ${BASH_VERSION:-} ]] || _is_zsh=1
@@ -45,6 +46,11 @@ _to_mapping_file="${HOME}/.config/to/mapping"
 if [[ -f "$_to_mapping_file" ]]; then
   while IFS='=' read -r name path; do
     [[ -z "$name" || "$name" =~ ^# ]] && continue
+    if [[ $_is_zsh -eq 1 ]]; then
+      name="${name:l}"
+    else
+      name="${name,,}"
+    fi
     _exists=0
     if [[ $_is_zsh -eq 1 ]]; then
       for _k in "${_to_keys[@]}"; do [[ "$_k" == "$name" ]] && { _exists=1; break; }; done
@@ -64,6 +70,7 @@ fi
 _to_usage() {
   echo "Usage: to <shortcut>"
   echo "       to add <path> [name]"
+  echo "       to path <name>"
   echo
   echo "Available shortcuts:"
   if [[ $_is_zsh -eq 1 ]]; then
@@ -73,13 +80,11 @@ _to_usage() {
     done
   else
     local key
-    for key in "${!DIRS[@]}"; do
+    while IFS= read -r key; do
       printf "  %-12s -> %s\n" "$key" "${DIRS[$key]}"
-    done
+    done < <(printf '%s\n' "${!DIRS[@]}" | sort)
   fi
   echo
-  echo "Add shortcuts: to add <path> [name]"
-  echo "Remove shortcuts: to remove <name>"
 }
 
 _to() {
@@ -87,7 +92,13 @@ _to() {
     _to_usage
     return 0
   fi
-  case "$1" in
+  local cmd
+  if [[ $_is_zsh -eq 1 ]]; then
+    cmd="${1:l}"
+  else
+    cmd="${1,,}"
+  fi
+  case "$cmd" in
     -h|--help) _to_usage; return 0 ;;
     add)
       if [[ $# -lt 2 ]]; then
@@ -96,6 +107,11 @@ _to() {
       fi
       local add_path="$2"
       local add_name="${3:-}"
+      if [[ $_is_zsh -eq 1 ]]; then
+        add_name="${add_name:l}"
+      else
+        add_name="${add_name,,}"
+      fi
       if [[ ! -e "$add_path" ]]; then
         echo "Error: path '$add_path' does not exist." >&2
         return 1
@@ -108,11 +124,16 @@ _to() {
       if [[ -z "$add_name" ]]; then
         add_name="${resolved##*/}"
         [[ "$add_name" == "" ]] && add_name="/"
+        if [[ $_is_zsh -eq 1 ]]; then
+          add_name="${add_name:l}"
+        else
+          add_name="${add_name,,}"
+        fi
       fi
       local mapping_file="${HOME}/.config/to/mapping"
       mkdir -p "$(dirname "$mapping_file")"
       if [[ -f "$mapping_file" ]]; then
-        grep -v "^${add_name}=" "$mapping_file" > "${mapping_file}.tmp" 2>/dev/null || true
+        grep -iv "^${add_name}=" "$mapping_file" > "${mapping_file}.tmp" 2>/dev/null || true
         mv "${mapping_file}.tmp" "$mapping_file"
       fi
       printf '%s=%s\n' "$add_name" "$resolved" >> "$mapping_file"
@@ -130,17 +151,21 @@ _to() {
         echo "Usage: to remove <name>" >&2
         return 1
       fi
-      local rm_name="${2,,}"
+      if [[ $_is_zsh -eq 1 ]]; then
+        rm_name="${2:l}"
+      else
+        rm_name="${2,,}"
+      fi
       local mapping_file="${HOME}/.config/to/mapping"
       if [[ ! -f "$mapping_file" ]]; then
         echo "Error: no mappings file." >&2
         return 1
       fi
-      if ! grep -q "^${rm_name}=" "$mapping_file" 2>/dev/null; then
+      if ! grep -iq "^${rm_name}=" "$mapping_file" 2>/dev/null; then
         echo "Error: shortcut '$rm_name' not found in mappings." >&2
         return 1
       fi
-      grep -v "^${rm_name}=" "$mapping_file" > "${mapping_file}.tmp" 2>/dev/null || true
+      grep -iv "^${rm_name}=" "$mapping_file" > "${mapping_file}.tmp" 2>/dev/null || true
       mv "${mapping_file}.tmp" "$mapping_file"
       # Remove from in-memory arrays
       if [[ $_is_zsh -eq 1 ]]; then
@@ -156,15 +181,45 @@ _to() {
       echo "Removed $rm_name"
       return 0
       ;;
+    path)
+      if [[ $# -lt 2 ]]; then
+        echo "Usage: to path <name>" >&2
+        return 1
+      fi
+      local path_target
+      if [[ $_is_zsh -eq 1 ]]; then
+        path_target="${2:l}"
+      else
+        path_target="${2,,}"
+      fi
+      local path_dir=""
+      local i
+      if [[ $_is_zsh -eq 1 ]]; then
+        for i in {1..${#_to_keys[@]}}; do
+          if [[ "$path_target" == "${_to_keys[$i]}" ]]; then
+            path_dir="${_to_dirs[$i]}"
+            break
+          fi
+        done
+      else
+        if [[ -v "DIRS[$path_target]" ]]; then
+          path_dir="${DIRS[$path_target]}"
+        fi
+      fi
+      if [[ -z "$path_dir" ]]; then
+        echo "Error: unknown shortcut '$path_target'." >&2
+        return 1
+      fi
+      if [[ ! -d "$path_dir" ]]; then
+        echo "Error: target directory '$path_dir' does not exist." >&2
+        return 1
+      fi
+      printf '%s\n' "$path_dir"
+      return 0
+      ;;
   esac
 
-  local target
-  if [[ $_is_zsh -eq 1 ]]; then
-    target="${1:l}"
-  else
-    target="${1,,}"
-  fi
-
+  local target="$cmd"
   local dir=""
   local i
   if [[ $_is_zsh -eq 1 ]]; then
@@ -232,6 +287,17 @@ if [[ $_is_zsh -eq 1 ]]; then
   target="${1:l}"
 else
   target="${1,,}"
+fi
+if [[ "$target" == "path" ]]; then
+  if [[ $# -lt 2 ]]; then
+    echo "Usage: to path <name>" >&2
+    exit 1
+  fi
+  if [[ $_is_zsh -eq 1 ]]; then
+    target="${2:l}"
+  else
+    target="${2,,}"
+  fi
 fi
 dir=""
 dir="$(resolve_dir "$target")" || {
